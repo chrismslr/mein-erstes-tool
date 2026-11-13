@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mein Ausgabenrechner</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f3f5f9; padding: 25px; }
+    main { max-width: 480px; margin: 40px auto; background: white; padding: 25px; border-radius: 15px; box-shadow: 0 4px 20px #0001; }
+    input, button { box-sizing: border-box; width: 100%; padding: 12px; margin: 7px 0; font-size: 16px; }
+    button { background: #2563eb; color: white; border: none; border-radius: 8px; cursor: pointer; }
+    li { margin: 10px 0; overflow-wrap: anywhere; }
+    h2 { color: #2563eb; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Mein Ausgabenrechner</h1>
+    <p>Erfasse deine Ausgaben:</p>
+    <form id="formular">
+      <input id="beschreibung" placeholder="Beschreibung" required>
+      <input id="betrag" type="number" min="0.01" step="0.01" placeholder="Betrag in Euro" required>
+      <button type="submit">Ausgabe hinzufügen</button>
+    </form>
+    <h2>Gesamt: <span id="gesamt">0,00 €</span></h2>
+    <ul id="liste"></ul>
+  </main>
+  <script>
+    const ausgaben = [];
+    const euro = wert => wert.toLocaleString("de-DE", {style:"currency",currency:"EUR"});
+    document.getElementById("formular").addEventListener("submit", function(e) {
+      e.preventDefault();
+      const beschreibung = document.getElementById("beschreibung").value.trim();
+      const betrag = Number(document.getElementById("betrag").value);
+      if (!beschreibung || !Number.isFinite(betrag) || betrag <= 0) return;
+      ausgaben.push(betrag);
+      const eintrag = document.createElement("li");
+      eintrag.textContent = beschreibung + ": " + euro(betrag);
+      document.getElementById("liste").appendChild(eintrag);
+      document.getElementById("gesamt").textContent = euro(ausgaben.reduce((a,b) => a+b, 0));
+      this.reset();
+    });
+  </script>
+</body>
+</html>
