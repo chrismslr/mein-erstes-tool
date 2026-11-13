@@ -1,235 +1,42 @@
 "use strict";
-
-const STORAGE_KEY = "ausgabenrechner_v3";
-const BACKUP_PREFIX = "ausgabenrechner_v3_backup_";
-const CATEGORIES = ["Lebensmittel", "Wohnen", "Mobilität", "Freizeit", "Gesundheit", "Shopping", "Sonstiges"];
-const euro = new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" });
-const dateFormatter = new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
-const monthFormatter = new Intl.DateTimeFormat("de-DE", { month: "long", year: "numeric" });
-
-const $ = (selector) => document.querySelector(selector);
-const els = {
-  form: $("#expenseForm"), description: $("#description"), amount: $("#amount"), category: $("#category"), date: $("#date"),
-  month: $("#monthFilter"), total: $("#monthTotal"), count: $("#entryCount"), budget: $("#budgetDisplay"), remaining: $("#remainingBudget"),
-  budgetHint: $("#budgetHint"), rows: $("#expenseRows"), empty: $("#emptyState"), table: $("#tableWrap"), chart: $("#chart"),
-  formStatus: $("#formStatus"), migrationStatus: $("#migrationStatus"), budgetEditor: $("#budgetEditor"), budgetInput: $("#budgetInput"),
-  budgetMonthLabel: $("#budgetMonthLabel"), dialog: $("#confirmDialog"), dialogTitle: $("#dialogTitle"), dialogText: $("#dialogText")
-};
-
-let state = loadState();
-
-function localDateString(date = new Date()) {
-  const offset = date.getTimezoneOffset() * 60000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
-}
-
-function emptyState() { return { version: 3, expenses: [], budgets: {}, updatedAt: new Date().toISOString() }; }
-
-function loadState() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (parsed && Array.isArray(parsed.expenses)) return normalizeState(parsed);
-  } catch (error) { console.warn("Gespeicherte V3-Daten konnten nicht gelesen werden.", error); }
-  return emptyState();
-}
-
-function normalizeState(value) {
-  return {
-    version: 3,
-    expenses: (value.expenses || []).map(normalizeExpense).filter(Boolean),
-    budgets: value.budgets && typeof value.budgets === "object" ? value.budgets : {},
-    updatedAt: value.updatedAt || new Date().toISOString()
-  };
-}
-
-function normalizeExpense(item) {
-  if (!item || typeof item !== "object") return null;
-  const description = String(item.description ?? item.name ?? item.title ?? item.text ?? "").trim();
-  const amount = Number(String(item.amount ?? item.betrag ?? item.value ?? "").replace(",", "."));
-  const rawDate = item.date ?? item.datum ?? item.createdAt;
-  const dateOnly = typeof rawDate === "string" ? rawDate.match(/^\d{4}-\d{2}-\d{2}/)?.[0] : null;
-  const date = dateOnly || (rawDate && !Number.isNaN(new Date(rawDate).getTime()) ? localDateString(new Date(rawDate)) : null);
-  if (!description || !Number.isFinite(amount) || amount <= 0 || !date) return null;
-  const proposedCategory = String(item.category ?? item.kategorie ?? "Sonstiges");
-  return { id: String(item.id || crypto.randomUUID()), description, amount: Math.round(amount * 100) / 100, category: CATEGORIES.includes(proposedCategory) ? proposedCategory : "Sonstiges", date };
-}
-
-function persist() {
-  state.updatedAt = new Date().toISOString();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-function selectedMonth() { return els.month.value; }
-function expensesFor(month) { return state.expenses.filter((item) => item.date.startsWith(month)).sort((a, b) => b.date.localeCompare(a.date)); }
-function monthTotal(month) { return expensesFor(month).reduce((sum, item) => sum + item.amount, 0); }
-function parseMonth(month) { const [year, part] = month.split("-").map(Number); return new Date(year, part - 1, 1); }
-
-function render() {
-  const month = selectedMonth();
-  const entries = expensesFor(month);
-  const total = monthTotal(month);
-  const budget = Number(state.budgets[month]);
-  els.total.textContent = euro.format(total);
-  els.count.textContent = `${entries.length} ${entries.length === 1 ? "Eintrag" : "Einträge"}`;
-  renderBudget(total, budget);
-  renderRows(entries);
-  renderChart(month);
-}
-
-function renderBudget(total, budget) {
-  if (Number.isFinite(budget) && budget >= 0) {
-    const remaining = budget - total;
-    els.budget.textContent = euro.format(budget);
-    els.remaining.textContent = euro.format(remaining);
-    els.remaining.style.color = remaining < 0 ? "var(--red)" : "var(--ink)";
-    els.budgetHint.textContent = remaining < 0 ? "Budget überschritten" : `${Math.round(budget ? (total / budget) * 100 : 0)} % genutzt`;
-    $("#editBudget").textContent = "Budget ändern";
-  } else {
-    els.budget.textContent = "Nicht gesetzt"; els.remaining.textContent = "—"; els.remaining.style.color = "";
-    els.budgetHint.textContent = "Lege zuerst ein Budget fest"; $("#editBudget").textContent = "Budget festlegen";
-  }
-}
-
-function renderRows(entries) {
-  els.rows.replaceChildren();
-  els.empty.hidden = entries.length > 0;
-  els.table.hidden = entries.length === 0;
-  entries.forEach((item) => {
-    const row = document.createElement("tr");
-    row.innerHTML = `<td>${escapeHtml(dateFormatter.format(new Date(`${item.date}T12:00:00`)))}</td><td>${escapeHtml(item.description)}</td><td><span class="category-badge">${escapeHtml(item.category)}</span></td><td class="number">${escapeHtml(euro.format(item.amount))}</td><td><button class="delete-row" type="button" data-id="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.description)} löschen">✕</button></td>`;
-    els.rows.append(row);
-  });
-}
-
-function renderChart(endMonth) {
-  const end = parseMonth(endMonth);
-  const months = Array.from({ length: 6 }, (_, index) => {
-    const date = new Date(end.getFullYear(), end.getMonth() - (5 - index), 1);
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-    return { key, date, total: monthTotal(key) };
-  });
-  const max = Math.max(...months.map((item) => item.total), 1);
-  els.chart.replaceChildren();
-  months.forEach((item) => {
-    const wrapper = document.createElement("div"); wrapper.className = "bar-item";
-    const height = Math.max((item.total / max) * 145, item.total ? 5 : 2);
-    wrapper.innerHTML = `<span class="bar-value">${escapeHtml(compactEuro(item.total))}</span><div class="bar ${item.key === endMonth ? "current" : ""}" style="height:${height}px" title="${escapeHtml(monthFormatter.format(item.date))}: ${escapeHtml(euro.format(item.total))}"></div><span class="bar-label">${escapeHtml(item.date.toLocaleDateString("de-DE", { month: "short" }))}</span>`;
-    els.chart.append(wrapper);
-  });
-  els.chart.setAttribute("aria-label", months.map((item) => `${monthFormatter.format(item.date)}: ${euro.format(item.total)}`).join(", "));
-}
-
-function compactEuro(value) { return value >= 1000 ? `${(value / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1 })} Tsd. €` : euro.format(value); }
-function escapeHtml(value) { const div = document.createElement("div"); div.textContent = String(value); return div.innerHTML; }
-function announce(message) { els.formStatus.textContent = message; window.setTimeout(() => { if (els.formStatus.textContent === message) els.formStatus.textContent = ""; }, 3000); }
-
-els.form.addEventListener("submit", (event) => {
-  event.preventDefault();
-  const expense = normalizeExpense({ description: els.description.value, amount: els.amount.value, category: els.category.value, date: els.date.value });
-  if (!expense) return announce("Bitte prüfe deine Eingaben.");
-  state.expenses.push(expense); persist(); els.form.reset(); els.date.value = localDateString(); els.category.value = "Lebensmittel";
-  els.month.value = expense.date.slice(0, 7); render(); announce("Ausgabe wurde gespeichert."); els.description.focus();
-});
-
-els.month.addEventListener("change", render);
-els.rows.addEventListener("click", async (event) => {
-  const button = event.target.closest("[data-id]"); if (!button) return;
-  const item = state.expenses.find((entry) => entry.id === button.dataset.id);
-  if (item && await confirmAction("Ausgabe löschen?", `„${item.description}“ (${euro.format(item.amount)}) wird dauerhaft gelöscht.`)) {
-    state.expenses = state.expenses.filter((entry) => entry.id !== item.id); persist(); render();
-  }
-});
-
-$("#editBudget").addEventListener("click", () => {
-  const month = selectedMonth(); els.budgetMonthLabel.textContent = monthFormatter.format(parseMonth(month));
-  els.budgetInput.value = state.budgets[month] ?? ""; els.budgetEditor.hidden = false; els.budgetInput.focus();
-});
-$("#cancelBudget").addEventListener("click", () => { els.budgetEditor.hidden = true; });
-$("#saveBudget").addEventListener("click", () => {
-  const value = Number(els.budgetInput.value);
-  if (!Number.isFinite(value) || value < 0) return announce("Bitte gib ein gültiges Budget ein.");
-  state.budgets[selectedMonth()] = Math.round(value * 100) / 100; persist(); els.budgetEditor.hidden = true; render(); announce("Budget wurde gespeichert.");
-});
-
-$("#deleteMonth").addEventListener("click", async () => {
-  const month = selectedMonth(); const entries = expensesFor(month);
-  if (!entries.length) return announce("In diesem Monat gibt es nichts zu löschen.");
-  if (await confirmAction("Ganzen Monat löschen?", `${entries.length} Einträge aus ${monthFormatter.format(parseMonth(month))} werden dauerhaft gelöscht.`)) {
-    state.expenses = state.expenses.filter((item) => !item.date.startsWith(month)); persist(); render(); announce("Monat wurde gelöscht.");
-  }
-});
-
-$("#exportCsv").addEventListener("click", () => {
-  const entries = expensesFor(selectedMonth());
-  if (!entries.length) return announce("Für diesen Monat sind keine Daten vorhanden.");
-  const lines = [["Datum", "Beschreibung", "Kategorie", "Betrag (EUR)"], ...entries.map((item) => [item.date, item.description, item.category, item.amount.toFixed(2).replace(".", ",")])];
-  const csv = "\uFEFF" + lines.map((row) => row.map(csvCell).join(";")).join("\r\n");
-  download(new Blob([csv], { type: "text/csv;charset=utf-8" }), `ausgaben-${selectedMonth()}.csv`);
-});
-
-function csvCell(value) { return `"${String(value).replaceAll('"', '""')}"`; }
-function download(blob, filename) { const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); }
-function backup(filename = `ausgabenrechner-sicherung-${localDateString()}.json`) { download(new Blob([JSON.stringify(state, null, 2)], { type: "application/json" }), filename); }
-
-$("#backupData").addEventListener("click", () => backup());
-$("#importFile").addEventListener("change", async (event) => {
-  const file = event.target.files[0]; if (!file) return;
-  try {
-    const parsed = JSON.parse(await file.text());
-    const source = Array.isArray(parsed) ? parsed : parsed.expenses;
-    if (!Array.isArray(source)) throw new Error("Keine Ausgabenliste gefunden");
-    const imported = source.map(normalizeExpense).filter(Boolean);
-    if (!imported.length && source.length) throw new Error("Das Format wird nicht erkannt");
-    saveInternalBackup();
-    mergeExpenses(imported);
-    if (parsed.budgets && typeof parsed.budgets === "object") state.budgets = { ...parsed.budgets, ...state.budgets };
-    persist(); render(); els.migrationStatus.textContent = `${imported.length} Einträge importiert. Eine interne Sicherung wurde angelegt.`;
-  } catch (error) { els.migrationStatus.textContent = `Import nicht möglich: ${error.message}`; }
-  event.target.value = "";
-});
-
-$("#scanLegacy").addEventListener("click", async () => {
-  const candidates = [];
-  for (let index = 0; index < localStorage.length; index++) {
-    const key = localStorage.key(index); if (!key || key === STORAGE_KEY || key.startsWith(BACKUP_PREFIX)) continue;
-    try {
-      const value = JSON.parse(localStorage.getItem(key));
-      const list = Array.isArray(value) ? value : value?.expenses ?? value?.ausgaben;
-      if (!Array.isArray(list) || !list.length) continue;
-      const normalized = list.map(normalizeExpense).filter(Boolean);
-      if (normalized.length && normalized.length / list.length >= 0.6) candidates.push({ key, expenses: normalized });
-    } catch (_) { /* Kein passendes JSON – bewusst überspringen. */ }
-  }
-  if (!candidates.length) { els.migrationStatus.textContent = "Keine eindeutig erkennbaren Altdaten gefunden. Nutze bei Bedarf den JSON-Import oder nenne den bisherigen Storage-Key."; return; }
-  const total = candidates.reduce((sum, item) => sum + item.expenses.length, 0);
-  const keys = candidates.map((item) => `„${item.key}“`).join(", ");
-  if (await confirmAction("Altdaten übernehmen?", `${total} plausible Einträge aus ${keys} wurden gefunden. Die Originaldaten bleiben unverändert; zusätzlich wird eine Sicherung angelegt.`)) {
-    saveInternalBackup(); candidates.forEach((candidate) => mergeExpenses(candidate.expenses)); persist(); render();
-    els.migrationStatus.textContent = `${total} Einträge geprüft und übernommen. Original und Sicherung bleiben gespeichert.`;
-  }
-});
-
-function mergeExpenses(imported) {
-  const fingerprints = new Set(state.expenses.map(fingerprint));
-  imported.forEach((item) => { const mark = fingerprint(item); if (!fingerprints.has(mark)) { state.expenses.push(item); fingerprints.add(mark); } });
-}
-function fingerprint(item) { return `${item.date}|${item.description.toLowerCase()}|${item.amount.toFixed(2)}|${item.category}`; }
-function saveInternalBackup() { localStorage.setItem(`${BACKUP_PREFIX}${Date.now()}`, JSON.stringify(state)); }
-function confirmAction(title, text) {
-  if (typeof els.dialog.showModal !== "function") return Promise.resolve(window.confirm(`${title}\n\n${text}`));
-  els.dialogTitle.textContent = title; els.dialogText.textContent = text; els.dialog.showModal();
-  return new Promise((resolve) => els.dialog.addEventListener("close", () => resolve(els.dialog.returnValue === "confirm"), { once: true }));
-}
-
-$("#themeToggle").addEventListener("click", () => {
-  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = next; localStorage.setItem("ausgabenrechner_theme", next);
-});
-
-function initialize() {
-  const today = localDateString(); els.date.value = today; els.month.value = today.slice(0, 7);
-  const theme = localStorage.getItem("ausgabenrechner_theme"); if (theme) document.documentElement.dataset.theme = theme;
-  render();
-}
-
-initialize();
+const STORAGE_KEY="ausgabenrechner_v4",V3_KEY="ausgabenrechner_v3",BACKUP_PREFIX="ausgabenrechner_v4_backup_";
+const CATEGORIES=["Lebensmittel","Wohnen","Mobilität","Freizeit","Gesundheit","Shopping","Sonstiges"];
+const euro=new Intl.NumberFormat("de-DE",{style:"currency",currency:"EUR"}),dateFmt=new Intl.DateTimeFormat("de-DE",{day:"2-digit",month:"2-digit",year:"numeric"}),monthFmt=new Intl.DateTimeFormat("de-DE",{month:"long",year:"numeric"});
+const $=s=>document.querySelector(s),E={form:$("#expenseForm"),editId:$("#editId"),description:$("#description"),amount:$("#amount"),category:$("#category"),date:$("#date"),submit:$("#submitExpense"),cancelEdit:$("#cancelEdit"),month:$("#monthFilter"),total:$("#monthTotal"),count:$("#entryCount"),budget:$("#budgetDisplay"),remaining:$("#remainingBudget"),budgetHint:$("#budgetHint"),rows:$("#expenseRows"),empty:$("#emptyState"),table:$("#tableWrap"),chart:$("#chart"),categoryChart:$("#categoryChart"),recurringList:$("#recurringList"),search:$("#searchInput"),categoryFilter:$("#categoryFilter"),status:$("#formStatus"),migration:$("#migrationStatus"),budgetEditor:$("#budgetEditor"),budgetInput:$("#budgetInput"),budgetMonthLabel:$("#budgetMonthLabel"),dialog:$("#confirmDialog"),dialogTitle:$("#dialogTitle"),dialogText:$("#dialogText"),recurringDialog:$("#recurringDialog"),recurringForm:$("#recurringForm")};
+const localDate=(d=new Date())=>new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10),uid=()=>crypto.randomUUID?.()||`${Date.now()}-${Math.random()}`,num=v=>Number(String(v??"").replace(",","."));
+const blank=()=>({version:4,expenses:[],budgets:{},recurring:[],updatedAt:new Date().toISOString()});
+function dateFrom(v){const direct=typeof v==="string"?v.match(/^\d{4}-\d{2}-\d{2}/)?.[0]:null;return direct||(v&&!isNaN(new Date(v))?localDate(new Date(v)):null)}
+function expense(x){if(!x||typeof x!=="object")return null;const description=String(x.description??x.name??x.title??x.text??"").trim(),amount=num(x.amount??x.betrag??x.value),date=dateFrom(x.date??x.datum??x.createdAt),raw=String(x.category??x.kategorie);if(!description||!Number.isFinite(amount)||amount<=0||!date)return null;return{id:String(x.id||uid()),description,amount:Math.round(amount*100)/100,category:CATEGORIES.includes(raw)?raw:"Sonstiges",date,recurringId:x.recurringId?String(x.recurringId):undefined}}
+function recurring(x){if(!x||typeof x!=="object")return null;const description=String(x.description||"").trim(),amount=num(x.amount),day=Math.min(31,Math.max(1,Number(x.day)||1));if(!description||!Number.isFinite(amount)||amount<=0)return null;return{id:String(x.id||uid()),description,amount:Math.round(amount*100)/100,category:CATEGORIES.includes(x.category)?x.category:"Sonstiges",day}}
+function normalize(x){return{version:4,expenses:(x.expenses||[]).map(expense).filter(Boolean),budgets:x.budgets&&typeof x.budgets==="object"?x.budgets:{},recurring:(x.recurring||[]).map(recurring).filter(Boolean),updatedAt:x.updatedAt||new Date().toISOString()}}
+function load(){try{const x=JSON.parse(localStorage.getItem(STORAGE_KEY));if(Array.isArray(x?.expenses))return normalize(x)}catch(e){console.warn(e)}try{const raw=localStorage.getItem(V3_KEY),x=JSON.parse(raw);if(Array.isArray(x?.expenses)){localStorage.setItem(`${BACKUP_PREFIX}vor_v3_migration_${Date.now()}`,raw);const migrated=normalize(x);migrated.migratedFrom=V3_KEY;localStorage.setItem(STORAGE_KEY,JSON.stringify(migrated));return migrated}}catch(e){console.warn(e)}return blank()}
+let state=load();
+function persist(){state.updatedAt=new Date().toISOString();localStorage.setItem(STORAGE_KEY,JSON.stringify(state))}
+const month=()=>E.month.value,parseMonth=m=>{const[y,n]=m.split("-").map(Number);return new Date(y,n-1,1)},all=m=>state.expenses.filter(x=>x.date.startsWith(m)).sort((a,b)=>b.date.localeCompare(a.date)),total=m=>all(m).reduce((s,x)=>s+x.amount,0);
+function filtered(m){const q=E.search.value.trim().toLowerCase(),c=E.categoryFilter.value;return all(m).filter(x=>(!q||x.description.toLowerCase().includes(q))&&(!c||x.category===c))}
+function applyRecurring(m){const[y,n]=m.split("-").map(Number),last=new Date(y,n,0).getDate();let changed=false;state.recurring.forEach(r=>{if(state.expenses.some(x=>x.recurringId===r.id&&x.date.startsWith(m)))return;state.expenses.push({id:uid(),recurringId:r.id,description:r.description,amount:r.amount,category:r.category,date:`${m}-${String(Math.min(r.day,last)).padStart(2,"0")}`});changed=true});if(changed)persist()}
+const esc=v=>{const d=document.createElement("div");d.textContent=String(v);return d.innerHTML},compact=v=>v>=1000?`${(v/1000).toLocaleString("de-DE",{maximumFractionDigits:1})} Tsd. €`:euro.format(v);
+function render(){const m=month();applyRecurring(m);const t=total(m),b=Number(state.budgets[m]);E.total.textContent=euro.format(t);E.count.textContent=`${all(m).length} ${all(m).length===1?"Eintrag":"Einträge"}`;renderBudget(t,b);renderRows(filtered(m));renderChart(m);renderCategories(m);renderRecurring()}
+function renderBudget(t,b){if(Number.isFinite(b)&&b>=0){const r=b-t;E.budget.textContent=euro.format(b);E.remaining.textContent=euro.format(r);E.remaining.style.color=r<0?"var(--red)":"var(--ink)";E.budgetHint.textContent=r<0?"Budget überschritten":`${Math.round(b?t/b*100:0)} % genutzt`;$("#editBudget").textContent="Budget ändern"}else{E.budget.textContent="Nicht gesetzt";E.remaining.textContent="—";E.remaining.style.color="";E.budgetHint.textContent="Lege zuerst ein Budget fest";$("#editBudget").textContent="Budget festlegen"}}
+function renderRows(items){E.rows.replaceChildren();E.empty.hidden=items.length>0;E.table.hidden=items.length===0;const has=all(month()).length;E.empty.querySelector("h3").textContent=has?"Keine Treffer":"Noch keine Ausgaben";E.empty.querySelector("p").textContent=has?"Ändere Suche oder Kategorie.":"Füge oben deinen ersten Eintrag für diesen Monat hinzu.";items.forEach(x=>{const tr=document.createElement("tr");tr.innerHTML=`<td>${esc(dateFmt.format(new Date(`${x.date}T12:00:00`)))}</td><td>${esc(x.description)}${x.recurringId?' <small title="Wiederkehrend">↻</small>':""}</td><td><span class="category-badge">${esc(x.category)}</span></td><td class="number">${esc(euro.format(x.amount))}</td><td class="row-actions"><button class="edit-row" data-edit="${esc(x.id)}" aria-label="${esc(x.description)} bearbeiten">✎</button><button class="delete-row" data-delete="${esc(x.id)}" aria-label="${esc(x.description)} löschen">✕</button></td>`;E.rows.append(tr)})}
+function renderChart(end){const d=parseMonth(end),months=Array.from({length:6},(_,i)=>{const date=new Date(d.getFullYear(),d.getMonth()-(5-i),1),key=`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}`;return{key,date,total:total(key)}}),max=Math.max(...months.map(x=>x.total),1);E.chart.replaceChildren();months.forEach(x=>{const el=document.createElement("div");el.className="bar-item";el.innerHTML=`<span class="bar-value">${esc(compact(x.total))}</span><div class="bar ${x.key===end?"current":""}" style="height:${Math.max(x.total/max*145,x.total?5:2)}px" title="${esc(monthFmt.format(x.date))}: ${esc(euro.format(x.total))}"></div><span class="bar-label">${esc(x.date.toLocaleDateString("de-DE",{month:"short"}))}</span>`;E.chart.append(el)});E.chart.setAttribute("aria-label",months.map(x=>`${monthFmt.format(x.date)}: ${euro.format(x.total)}`).join(", "))}
+function renderCategories(m){const sums=CATEGORIES.map(category=>({category,total:all(m).filter(x=>x.category===category).reduce((s,x)=>s+x.amount,0)})).filter(x=>x.total).sort((a,b)=>b.total-a.total);E.categoryChart.replaceChildren();if(!sums.length){E.categoryChart.innerHTML='<p class="category-empty">Noch keine Daten für diesen Monat.</p>';return}const max=sums[0].total;sums.forEach(x=>{const row=document.createElement("div");row.className="category-row";row.innerHTML=`<span>${esc(x.category)}</span><div class="category-track"><div class="category-fill" style="width:${x.total/max*100}%"></div></div><strong>${esc(euro.format(x.total))}</strong>`;E.categoryChart.append(row)})}
+function renderRecurring(){E.recurringList.replaceChildren();if(!state.recurring.length){E.recurringList.innerHTML='<p class="category-empty">Noch keine wiederkehrenden Ausgaben.</p>';return}state.recurring.forEach(x=>{const row=document.createElement("div");row.className="recurring-item";row.innerHTML=`<div><strong>${esc(x.description)} · ${esc(euro.format(x.amount))}</strong><small>${esc(x.category)} · monatlich am ${x.day}.</small></div><div class="recurring-actions"><button data-recurring-edit="${esc(x.id)}" aria-label="${esc(x.description)} bearbeiten">✎</button><button class="danger-link" data-recurring-delete="${esc(x.id)}" aria-label="${esc(x.description)} löschen">✕</button></div>`;E.recurringList.append(row)})}
+function announce(msg){E.status.textContent=msg;setTimeout(()=>{if(E.status.textContent===msg)E.status.textContent=""},3000)}
+function resetForm(){E.form.reset();E.editId.value="";E.date.value=localDate();E.category.value="Lebensmittel";E.submit.textContent="Ausgabe speichern";E.cancelEdit.hidden=true}
+E.form.addEventListener("submit",e=>{e.preventDefault();const x=expense({id:E.editId.value||undefined,description:E.description.value,amount:E.amount.value,category:E.category.value,date:E.date.value});if(!x)return announce("Bitte prüfe deine Eingaben.");const i=state.expenses.findIndex(y=>y.id===E.editId.value),edited=i>=0;if(edited)state.expenses[i]={...state.expenses[i],...x};else state.expenses.push(x);persist();E.month.value=x.date.slice(0,7);resetForm();render();announce(edited?"Änderung wurde gespeichert.":"Ausgabe wurde gespeichert.")});E.cancelEdit.addEventListener("click",resetForm);
+E.rows.addEventListener("click",async e=>{const edit=e.target.closest("[data-edit]"),del=e.target.closest("[data-delete]");if(edit){const x=state.expenses.find(y=>y.id===edit.dataset.edit);if(x){E.editId.value=x.id;E.description.value=x.description;E.amount.value=x.amount;E.category.value=x.category;E.date.value=x.date;E.submit.textContent="Änderung speichern";E.cancelEdit.hidden=false;E.form.scrollIntoView({behavior:"smooth"});E.description.focus()}}if(del){const x=state.expenses.find(y=>y.id===del.dataset.delete);if(x&&await confirmAction("Ausgabe löschen?",`„${x.description}“ (${euro.format(x.amount)}) wird dauerhaft gelöscht.`)){state.expenses=state.expenses.filter(y=>y.id!==x.id);persist();render()}}});
+E.month.addEventListener("change",render);E.search.addEventListener("input",render);E.categoryFilter.addEventListener("change",render);
+$("#editBudget").addEventListener("click",()=>{const m=month();E.budgetMonthLabel.textContent=monthFmt.format(parseMonth(m));E.budgetInput.value=state.budgets[m]??"";E.budgetEditor.hidden=false;E.budgetInput.focus()});$("#cancelBudget").addEventListener("click",()=>E.budgetEditor.hidden=true);$("#saveBudget").addEventListener("click",()=>{const v=Number(E.budgetInput.value);if(!Number.isFinite(v)||v<0)return announce("Bitte gib ein gültiges Budget ein.");state.budgets[month()]=Math.round(v*100)/100;persist();E.budgetEditor.hidden=true;render();announce("Budget wurde gespeichert.")});
+function openRecurring(x){E.recurringForm.reset();$("#recurringId").value=x?.id||"";$("#recurringDescription").value=x?.description||"";$("#recurringAmount").value=x?.amount||"";$("#recurringCategory").value=x?.category||"Wohnen";$("#recurringDay").value=x?.day||1;E.recurringDialog.showModal()}
+$("#addRecurring").addEventListener("click",()=>openRecurring());$("#cancelRecurring").addEventListener("click",()=>E.recurringDialog.close());E.recurringForm.addEventListener("submit",e=>{e.preventDefault();const x=recurring({id:$("#recurringId").value||undefined,description:$("#recurringDescription").value,amount:$("#recurringAmount").value,category:$("#recurringCategory").value,day:$("#recurringDay").value});if(!x)return;const i=state.recurring.findIndex(y=>y.id===x.id);if(i>=0)state.recurring[i]=x;else state.recurring.push(x);persist();E.recurringDialog.close();render();announce("Wiederkehrende Ausgabe gespeichert.")});E.recurringList.addEventListener("click",async e=>{const edit=e.target.closest("[data-recurring-edit]"),del=e.target.closest("[data-recurring-delete]");if(edit)openRecurring(state.recurring.find(x=>x.id===edit.dataset.recurringEdit));if(del){const x=state.recurring.find(y=>y.id===del.dataset.recurringDelete);if(x&&await confirmAction("Serie löschen?",`Die Serie „${x.description}“ wird gelöscht. Bereits erzeugte Ausgaben bleiben erhalten.`)){state.recurring=state.recurring.filter(y=>y.id!==x.id);persist();render()}}});
+$("#deleteMonth").addEventListener("click",async()=>{const m=month(),items=all(m);if(!items.length)return announce("In diesem Monat gibt es nichts zu löschen.");if(await confirmAction("Ganzen Monat löschen?",`${items.length} Einträge aus ${monthFmt.format(parseMonth(m))} werden dauerhaft gelöscht.`)){state.expenses=state.expenses.filter(x=>!x.date.startsWith(m));persist();render();announce("Monat wurde gelöscht.")}});
+const csvCell=v=>`"${String(v).replaceAll('"','""')}"`;function download(blob,name){const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+$("#exportCsv").addEventListener("click",()=>{const items=filtered(month());if(!items.length)return announce("Für diese Auswahl sind keine Daten vorhanden.");const lines=[["Datum","Beschreibung","Kategorie","Betrag (EUR)"],...items.map(x=>[x.date,x.description,x.category,x.amount.toFixed(2).replace(".",",")])];download(new Blob(["\uFEFF"+lines.map(r=>r.map(csvCell).join(";")).join("\r\n")],{type:"text/csv;charset=utf-8"}),`ausgaben-${month()}.csv`)});
+function backup(label="vor_wiederherstellung"){localStorage.setItem(`${BACKUP_PREFIX}${label}_${Date.now()}`,JSON.stringify(state))}$("#backupData").addEventListener("click",()=>download(new Blob([JSON.stringify(state,null,2)],{type:"application/json"}),`ausgabenrechner-v4-sicherung-${localDate()}.json`));
+$("#importFile").addEventListener("change",async e=>{const file=e.target.files[0];if(!file)return;try{const raw=JSON.parse(await file.text());if(!Array.isArray(raw.expenses))throw Error("Keine vollständige Ausgaben-Sicherung gefunden");const restored=normalize(raw);if(!await confirmAction("Sicherung wiederherstellen?",`${restored.expenses.length} Ausgaben, ${Object.keys(restored.budgets).length} Budgets und ${restored.recurring.length} Serien ersetzen den aktuellen Stand.`))return;backup();state=restored;persist();render();E.migration.textContent="Sicherung vollständig wiederhergestellt. Der vorherige Stand wurde intern gesichert."}catch(err){E.migration.textContent=`Wiederherstellung nicht möglich: ${err.message}`}finally{e.target.value=""}});
+$("#scanLegacy").addEventListener("click",async()=>{const found=[];for(let i=0;i<localStorage.length;i++){const key=localStorage.key(i);if(!key||[STORAGE_KEY,V3_KEY].includes(key)||key.startsWith(BACKUP_PREFIX))continue;try{const v=JSON.parse(localStorage.getItem(key)),list=Array.isArray(v)?v:v?.expenses??v?.ausgaben;if(!Array.isArray(list)||!list.length)continue;const items=list.map(expense).filter(Boolean);if(items.length/list.length>=.6)found.push({key,items})}catch{}}if(!found.length){E.migration.textContent="Keine weiteren eindeutig erkennbaren Altdaten gefunden.";return}const n=found.reduce((s,x)=>s+x.items.length,0);if(await confirmAction("Weitere Altdaten übernehmen?",`${n} plausible Einträge aus ${found.map(x=>`„${x.key}“`).join(", ")} wurden gefunden.`)){backup("vor_altimport");found.forEach(x=>merge(x.items));persist();render();E.migration.textContent=`${n} Einträge geprüft und ohne Duplikate übernommen.`}});
+function fingerprint(x){return`${x.date}|${x.description.toLowerCase()}|${x.amount.toFixed(2)}|${x.category}`}function merge(items){const marks=new Set(state.expenses.map(fingerprint));items.forEach(x=>{const m=fingerprint(x);if(!marks.has(m)){state.expenses.push(x);marks.add(m)}})}
+function confirmAction(title,text){if(typeof E.dialog.showModal!=="function")return Promise.resolve(confirm(`${title}\n\n${text}`));E.dialogTitle.textContent=title;E.dialogText.textContent=text;E.dialog.showModal();return new Promise(resolve=>E.dialog.addEventListener("close",()=>resolve(E.dialog.returnValue==="confirm"),{once:true}))}
+$("#themeToggle").addEventListener("click",()=>{const next=document.documentElement.dataset.theme==="dark"?"light":"dark";document.documentElement.dataset.theme=next;localStorage.setItem("ausgabenrechner_theme",next)});
+function init(){const today=localDate();E.date.value=today;E.month.value=today.slice(0,7);const theme=localStorage.getItem("ausgabenrechner_theme");if(theme)document.documentElement.dataset.theme=theme;render();if(state.migratedFrom===V3_KEY){E.migration.textContent="V3-Daten wurden automatisch übernommen. Der V3-Speicher und eine Sicherung bleiben erhalten.";delete state.migratedFrom;persist()}}init();

@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Privater Ausgabenrechner mit Monatsbudget, Filtern und Diagramm">
-  <title>Ausgabenrechner 3.0</title>
+  <title>Ausgabenrechner 4.0</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="hero">
     <div>
-      <p class="eyebrow">Ausgabenrechner 3.0</p>
+      <p class="eyebrow">Ausgabenrechner 4.0</p>
       <h1>Dein Geld. Klar im Blick.</h1>
       <p class="subtitle">Alle Daten bleiben ausschließlich in diesem Browser gespeichert.</p>
     </div>
@@ -27,6 +27,7 @@
         <p id="formStatus" class="status" role="status" aria-live="polite"></p>
       </div>
       <form id="expenseForm">
+        <input id="editId" type="hidden">
         <label>Beschreibung
           <input id="description" name="description" type="text" maxlength="80" placeholder="z. B. Wocheneinkauf" required>
         </label>
@@ -42,7 +43,7 @@
         <label>Datum
           <input id="date" name="date" type="date" required>
         </label>
-        <button class="primary" type="submit">Ausgabe speichern</button>
+        <div class="form-actions"><button id="submitExpense" class="primary" type="submit">Ausgabe speichern</button><button id="cancelEdit" class="secondary" type="button" hidden>Abbrechen</button></div>
       </form>
     </section>
 
@@ -72,6 +73,16 @@
         <div class="chart-title"><div><h3>Die letzten 6 Monate</h3><p>Ausgaben im Vergleich</p></div><span class="legend"><i></i> Ausgaben</span></div>
         <div id="chart" class="chart" role="img" aria-label="Balkendiagramm der Ausgaben der letzten sechs Monate"></div>
       </article>
+      <div class="analytics-grid">
+        <article class="panel category-panel">
+          <div class="chart-title"><div><h3>Nach Kategorien</h3><p>Verteilung im gewählten Monat</p></div></div>
+          <div id="categoryChart" class="category-chart" aria-label="Ausgaben nach Kategorien"></div>
+        </article>
+        <article class="panel recurring-panel">
+          <div class="chart-title"><div><h3>Wiederkehrende Ausgaben</h3><p>Monatlich automatisch einplanen</p></div><button id="addRecurring" class="secondary compact" type="button">Neu</button></div>
+          <div id="recurringList" class="recurring-list"></div>
+        </article>
+      </div>
     </section>
 
     <section class="panel list-panel" aria-labelledby="listHeading">
@@ -79,6 +90,7 @@
         <div><p class="section-number">03</p><h2 id="listHeading">Ausgaben im gewählten Monat</h2></div>
         <div class="actions"><button id="exportCsv" class="secondary" type="button">CSV exportieren</button><button id="deleteMonth" class="danger" type="button">Monat löschen</button></div>
       </div>
+      <div class="filter-bar"><label>Suche<input id="searchInput" type="search" placeholder="Beschreibung durchsuchen"></label><label>Kategorie<select id="categoryFilter"><option value="">Alle Kategorien</option><option>Lebensmittel</option><option>Wohnen</option><option>Mobilität</option><option>Freizeit</option><option>Gesundheit</option><option>Shopping</option><option>Sonstiges</option></select></label></div>
       <div id="emptyState" class="empty-state"><span>◎</span><h3>Noch keine Ausgaben</h3><p>Füge oben deinen ersten Eintrag für diesen Monat hinzu.</p></div>
       <div class="table-wrap" id="tableWrap" hidden>
         <table><thead><tr><th>Datum</th><th>Beschreibung</th><th>Kategorie</th><th class="number">Betrag</th><th><span class="sr-only">Aktion</span></th></tr></thead><tbody id="expenseRows"></tbody></table>
@@ -86,15 +98,16 @@
     </section>
 
     <details class="panel migration-panel">
-      <summary>Daten aus Version 2.0 übernehmen oder sichern</summary>
-      <p>Da der bisherige Speichername unbekannt ist, verändert Version 3.0 keine fremden Browserdaten. Sie sucht nur nach plausiblen Ausgabenlisten und erstellt vor einer Übernahme automatisch eine Sicherung.</p>
-      <div class="actions migration-actions"><button id="scanLegacy" class="secondary" type="button">Altdaten suchen</button><button id="backupData" class="secondary" type="button">JSON-Sicherung</button><label class="file-button">JSON importieren<input id="importFile" type="file" accept="application/json,.json"></label></div>
+      <summary>Daten sichern oder aus älteren Versionen übernehmen</summary>
+      <p>Version 4.0 übernimmt V3-Daten automatisch und lässt den bisherigen V3-Speicher unverändert. Eine vollständige Sicherung enthält Ausgaben, Budgets und wiederkehrende Einträge.</p>
+      <div class="actions migration-actions"><button id="scanLegacy" class="secondary" type="button">Weitere Altdaten suchen</button><button id="backupData" class="secondary" type="button">Vollständige JSON-Sicherung</button><label class="file-button">Sicherung wiederherstellen<input id="importFile" type="file" accept="application/json,.json"></label></div>
       <p id="migrationStatus" class="status" role="status" aria-live="polite"></p>
     </details>
   </main>
 
-  <dialog id="confirmDialog"><form method="dialog"><h2 id="dialogTitle">Wirklich löschen?</h2><p id="dialogText"></p><div class="dialog-actions"><button value="cancel" class="secondary">Abbrechen</button><button value="confirm" class="danger">Löschen</button></div></form></dialog>
-  <footer>Ausgabenrechner 3.0 · Lokal, privat und ohne Konto</footer>
+  <dialog id="confirmDialog"><form method="dialog"><h2 id="dialogTitle">Wirklich löschen?</h2><p id="dialogText"></p><div class="dialog-actions"><button value="cancel" class="secondary">Abbrechen</button><button value="confirm" class="danger">Bestätigen</button></div></form></dialog>
+  <dialog id="recurringDialog"><form id="recurringForm"><h2>Wiederkehrende Ausgabe</h2><input id="recurringId" type="hidden"><label>Beschreibung<input id="recurringDescription" maxlength="80" required></label><label>Betrag<div class="money-input"><span>€</span><input id="recurringAmount" type="number" min="0.01" step="0.01" required></div></label><label>Kategorie<select id="recurringCategory"><option>Lebensmittel</option><option>Wohnen</option><option>Mobilität</option><option>Freizeit</option><option>Gesundheit</option><option>Shopping</option><option>Sonstiges</option></select></label><label>Tag im Monat<input id="recurringDay" type="number" min="1" max="31" value="1" required></label><div class="dialog-actions"><button id="cancelRecurring" class="secondary" type="button">Abbrechen</button><button class="primary" type="submit">Speichern</button></div></form></dialog>
+  <footer>Ausgabenrechner 4.0 · Lokal, privat und ohne Konto</footer>
   <script src="script.js" defer></script>
 </body>
 </html>
